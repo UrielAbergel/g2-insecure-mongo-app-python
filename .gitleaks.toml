@@ -1,0 +1,5 @@
+[[rules]]
+id = "custom-mongodb-uri"
+description = "MongoDB URI with credentials"
+regex = '''mongodb:\/\/[^:@\s]+:[^:@\s]+@[^:\s\/]+(?::\d+)?'''
+tags = ["key", "mongodb", "uri", "custom"]

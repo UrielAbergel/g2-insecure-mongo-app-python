@@ -1,0 +1,207 @@
+name: InsecureMongoApp CI
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write   # required for github/codeql-action/upload-sarif
+
+# Cancel superseded in-progress runs on the same branch so a newer push wins.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setup:
+    name: Shared Setup (Install & Build)
+    runs-on: ubuntu-latest
+    outputs:
+      docker-cache-key: ${{ steps.docker-cache.outputs.cache-key }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pypoetry
+          key: poetry-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            poetry-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          poetry install --with dev
+
+      - name: Save Docker build cache key
+        id: docker-cache
+        run: echo "cache-key=docker-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Run Tests
+    needs: setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      - name: Start MongoDB
+        run: docker compose up -d mongo
+
+      - name: Wait for MongoDB to be ready
+        run: |
+          for i in {1..10}; do
+            if docker exec $(docker ps -qf "name=mongo") mongosh "mongodb://root:example@localhost:27017/admin" --eval "db.runCommand({ ping: 1 })" > /dev/null 2>&1; then
+              echo "MongoDB is ready"
+              exit 0
+            fi
+            echo "Waiting for MongoDB..."
+            sleep 5
+          done
+          echo "MongoDB failed to initialize"
+          docker compose logs
+          exit 1
+
+      - name: Run Tests
+        run: poetry run pytest tests/ -v
+
+      - name: Shut down MongoDB
+        if: always()
+        run: docker compose down
+
+  snyk:
+    name: Snyk Scans (SCA + Code + Container) -> Code Scanning
+    needs: setup
+    runs-on: ubuntu-latest
+    env:
+      SNYK_TOKEN: ${{ vars.SNYK_TOKEN }}
+      SNYK_ORG_ID: ${{ vars.SNYK_ORG_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      # Resolve dependencies so the Open Source (SCA) scan sees the full dependency tree.
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      - name: Install Snyk CLI
+        run: |
+          curl -sSL https://static.snyk.io/cli/latest/snyk-linux -o snyk
+          chmod +x snyk
+          sudo mv snyk /usr/local/bin
+
+      - name: Authenticate with Snyk
+        run: snyk auth "$SNYK_TOKEN"
+
+      # Each scan captures Snyk's exit code. Snyk exits 0 (no issues) or 1 (issues found) on a
+      # REAL result, and 2/3 on error / no-supported-projects. We only upload on 0/1 so an
+      # errored scan never produces an empty SARIF that would falsely clear existing alerts
+      # (GitHub supersedes per category, so a "0 results" upload closes that category's alerts).
+      # `if ... then/else` captures Snyk's exit code WITHOUT tripping bash -e (snyk exits 1 on
+      # the common "issues found" case, which must not abort the step before we record the code).
+      - name: Snyk Open Source (SCA)
+        id: sca
+        run: |
+          if snyk test --org="$SNYK_ORG_ID" --sarif-file-output=snyk-oss.sarif; then code=0; else code=$?; fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Snyk Code (SAST)
+        id: code
+        run: |
+          if snyk code test --org="$SNYK_ORG_ID" --sarif-file-output=snyk-code.sarif; then code=0; else code=$?; fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      # Build with an explicit tag so the scan target is deterministic across repos
+      # (fixes the prior SNYK-CBI-0014 404 from compose naming the image after the folder).
+      - name: Build app image
+        run: docker build -t snyk-scan-image:latest .
+
+      - name: Snyk Container
+        id: container
+        run: |
+          if snyk container test snyk-scan-image:latest --file=Dockerfile --org="$SNYK_ORG_ID" --sarif-file-output=snyk-container.sarif; then code=0; else code=$?; fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      # GitHub Code Scanning rejects SARIF whose rules have security-severity: null
+      # ("invalid security severity value, is not a number: null"). Snyk emits null for
+      # issues without a CVSS score, so coerce any null/missing value to "0.0".
+      - name: Normalize SARIF severities
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          for f in ("snyk-oss.sarif", "snyk-code.sarif", "snyk-container.sarif"):
+              if not os.path.exists(f):
+                  continue
+              with open(f) as fh:
+                  data = json.load(fh)
+              for run in data.get("runs", []):
+                  for rule in run.get("tool", {}).get("driver", {}).get("rules", []):
+                      props = rule.setdefault("properties", {})
+                      ss = props.get("security-severity")
+                      if ss is None or str(ss).lower() in ("null", "", "undefined"):
+                          props["security-severity"] = "0.0"
+              with open(f, "w") as fh:
+                  json.dump(data, fh)
+              print("normalized", f)
+          PY
+
+      # Upload only when the scan returned a real result (exit 0 or 1) AND wrote a SARIF.
+      - name: Upload SCA SARIF
+        if: ${{ always() && hashFiles('snyk-oss.sarif') != '' && (steps.sca.outputs.code == '0' || steps.sca.outputs.code == '1') }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-oss.sarif
+          category: snyk-oss
+
+      - name: Upload Code SARIF
+        if: ${{ always() && hashFiles('snyk-code.sarif') != '' && (steps.code.outputs.code == '0' || steps.code.outputs.code == '1') }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-code.sarif
+          category: snyk-code
+
+      - name: Upload Container SARIF
+        if: ${{ always() && hashFiles('snyk-container.sarif') != '' && (steps.container.outputs.code == '0' || steps.container.outputs.code == '1') }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-container.sarif
+          category: snyk-container

@@ -1,0 +1,9 @@
+.git/
+mongo_init/
+images/
+.gitleaks.toml
+.gitignore
+docker-compose.yml
+Dockerfile
+Makefile
+README.md

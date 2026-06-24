@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "insecure-mongo-app"
+version = "0.1.0"
+description = "Intentionally insecure Flask API using MongoDB and JWT, for security training purposes"
+authors = ["Avishay Bar <your.email@example.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{ include = "handlers" }, { include = "services" }, { include = "models" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+flask = "==3.0.0"
+pymongo = "==4.13.2"
+pyjwt = "^2.8.0"
+cryptography = "^42.0.0"
+flasgger = "^0.9.7.1"
+
+
+[tool.poetry.group.dev.dependencies]
+black = "==24.1.1"
+isort = "==5.11.5"
+flake8 = "==7.0.0"
+yamllint = "*"
+pre-commit = "*"
+pytest = "^8.2.0"
+pytest-asyncio = "^1.0.0"
+httpx = "^0.28.1"
+
+[tool.poetry.requires-plugins]
+poetry-plugin-export = "^1.9.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
