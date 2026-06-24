@@ -1,5 +1,22 @@
+[allowlist]
+paths = [
+  '''(^|/)site-packages/''',
+  '''(^|/)\.venv/''',
+  '''(^|/)venv/''',
+  '''(^|/)node_modules/''',
+]
+
 [[rules]]
 id = "custom-mongodb-uri"
 description = "MongoDB URI with credentials"
 regex = '''mongodb:\/\/[^:@\s]+:[^:@\s]+@[^:\s\/]+(?::\d+)?'''
 tags = ["key", "mongodb", "uri", "custom"]
+
+[rules.allowlist]
+regexTarget = "line"
+regexes = [
+  '''mongodb://\$\{''',
+  '''mongodb://\{''',
+  '''\$\{\{\s*secrets\.''',
+  '''os\.getenv\(''',
+]

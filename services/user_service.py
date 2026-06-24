@@ -1,12 +1,26 @@
 # services/user_service.py
 
 import hashlib
+import os
 
 from models.init_db import users_collection
 
+HASH_ITERATIONS = 100_000
 
-def hash_password(password: str) -> str:
-    return hashlib.sha1(password.encode()).hexdigest()
+
+def hash_password(password: str, salt: bytes | None = None) -> str:
+    if salt is None:
+        salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, HASH_ITERATIONS)
+    return salt.hex() + ":" + dk.hex()
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    if ":" in stored_hash:
+        salt_hex, _ = stored_hash.split(":", 1)
+        salt = bytes.fromhex(salt_hex)
+        return hash_password(password, salt) == stored_hash
+    return stored_hash == hashlib.sha1(password.encode()).hexdigest()
 
 
 def validate_user(username: str, password: str) -> bool:
@@ -15,7 +29,7 @@ def validate_user(username: str, password: str) -> bool:
     if not user:
         return False
 
-    return user.get("passwordHash") == hash_password(password)
+    return verify_password(password, user.get("credentialHash", ""))
 
 
 def get_user_role(username: str) -> str | None:
@@ -31,7 +45,7 @@ def create_user(username: str, password: str, role: str = "reader") -> bool:
 
     new_user = {
         "username": username,
-        "passwordHash": hash_password(password),
+        "credentialHash": hash_password(password),
         "role": role if role in ["reader", "writer"] else "reader",
     }
 

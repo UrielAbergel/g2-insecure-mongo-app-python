@@ -39,7 +39,7 @@ def handle_post_item(collection: Collection):
         data = request.get_json(force=True)
         item_id = str(uuid.uuid4())
 
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         signature = private_key.sign(
             item_id.encode(), padding.PKCS1v15(), hashes.SHA1()
         )

@@ -11,9 +11,7 @@ services:
     ports:
       - "8000:5000"
     environment:
-      MONGO_HOST: mongo
-      MONGO_USER: ${MONGO_USER}
-      MONGO_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_URI: ${MONGO_URI}
 
   mongo:
     image: mongo:6.0

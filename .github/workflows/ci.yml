@@ -77,11 +77,10 @@ jobs:
 
       - name: Wait for MongoDB to be ready
         env:
-          MONGO_USER: ${{ secrets.MONGO_USER }}
-          MONGO_PASSWORD: ${{ secrets.MONGO_PASSWORD }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
         run: |
           for i in {1..10}; do
-            if docker exec $(docker ps -qf "name=mongo") mongosh "mongodb://${MONGO_USER}:${MONGO_PASSWORD}@localhost:27017/admin" --eval "db.runCommand({ ping: 1 })" > /dev/null 2>&1; then
+            if docker exec $(docker ps -qf "name=mongo") mongosh "${MONGO_URI}" --eval "db.runCommand({ ping: 1 })" > /dev/null 2>&1; then
               echo "MongoDB is ready"
               exit 0
             fi
